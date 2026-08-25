@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#07090d" />
+  <meta name="description" content="A transparent, signal-based Bitcoin market dashboard and short-term forecasting tool." />
+  <title>BTC Predicter — Bitcoin Signal Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="BTC Predicter home">
+      <span class="brand-mark">₿</span>
+      <span>BTC <b>PREDICTER</b></span>
+    </a>
+    <div class="market-status"><span class="pulse"></span> 1-minute candles live</div>
+    <button class="icon-button" id="refreshButton" aria-label="Refresh market data" title="Refresh market data">↻</button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">BITCOIN / U.S. DOLLAR</p>
+        <div class="price-line">
+          <h1 id="currentPrice">$—</h1>
+          <span class="price-change neutral" id="priceChange">—</span>
+        </div>
+        <p class="updated" id="lastUpdated">Connecting to market…</p>
+      </div>
+      <div class="range-picker" role="group" aria-label="Chart time range">
+        <button data-minutes="60">1H</button>
+        <button class="active" data-minutes="180">3H</button>
+        <button data-minutes="360">6H</button>
+        <button data-minutes="720">12H</button>
+      </div>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel chart-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-label">PRICE ACTION</p>
+            <h2 id="chartTitle">3-hour market structure</h2>
+          </div>
+          <div class="legend"><span></span> BTC price</div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="priceChart" aria-label="Bitcoin price chart" role="img"></canvas>
+          <div class="tooltip" id="chartTooltip" hidden></div>
+        </div>
+        <div class="chart-axis"><span id="chartStart">—</span><span id="chartEnd">—</span></div>
+      </article>
+
+      <article class="panel forecast-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-label">NEXT 15 MINUTES</p>
+            <h2>Signal forecast</h2>
+          </div>
+          <span class="confidence-tag" id="confidenceTag">CALCULATING</span>
+        </div>
+        <div class="forecast-core">
+          <div class="probability-ring" id="probabilityRing">
+            <div><strong id="upProbability">—</strong><span>chance up</span></div>
+          </div>
+          <div class="forecast-copy">
+            <p class="forecast-direction" id="forecastDirection">Analyzing market</p>
+            <p id="forecastSummary">Building a forecast from trend, momentum and volatility.</p>
+          </div>
+        </div>
+        <div class="target-box">
+          <div><span>15m target</span><strong id="targetPrice">$—</strong></div>
+          <div><span>Expected range</span><strong id="expectedRange">$— – $—</strong></div>
+        </div>
+        <div class="forecast-clock"><span>Next update</span><strong id="countdown">01:00</strong></div>
+        <p class="disclaimer">Experimental statistical estimate. Not financial advice.</p>
+      </article>
+    </section>
+
+    <section class="metrics" aria-label="Market indicators">
+      <article class="metric-card"><div class="metric-icon trend">↗</div><div><span>15m momentum</span><strong id="momentumMetric">—</strong></div><small id="momentumLabel">Analyzing</small></article>
+      <article class="metric-card"><div class="metric-icon volatility">≈</div><div><span>Volatility</span><strong id="volatilityMetric">—</strong></div><small id="volatilityLabel">Analyzing</small></article>
+      <article class="metric-card"><div class="metric-icon strength">◫</div><div><span>Trend strength</span><strong id="strengthMetric">—</strong></div><small id="strengthLabel">Analyzing</small></article>
+      <article class="metric-card"><div class="metric-icon sentiment">●</div><div><span>Market signal</span><strong id="signalMetric">—</strong></div><small id="signalLabel">Analyzing</small></article>
+    </section>
+
+    <section class="validation panel">
+      <div class="validation-heading">
+        <div><p class="panel-label">WALK-FORWARD VALIDATION</p><h2>Does the model actually work?</h2></div>
+        <span id="sampleSize">0 historical forecasts</span>
+      </div>
+      <div class="score-grid">
+        <div><span>Direction accuracy</span><strong id="directionAccuracy">—</strong><small>Up/down calls correct</small></div>
+        <div><span>Range accuracy</span><strong id="rangeAccuracy">—</strong><small>Actual price inside range</small></div>
+        <div><span>Mean error</span><strong id="meanError">—</strong><small>Target vs. actual price</small></div>
+        <div><span>Tracked live</span><strong id="liveTracked">0</strong><small>Saved in this browser</small></div>
+      </div>
+    </section>
+
+    <section class="method panel">
+      <div><p class="panel-label">HOW IT WORKS</p><h2>No black box. Just measurable signals.</h2></div>
+      <p>The 15-minute forecast combines one-minute trend slope, moving-average spread, momentum, RSI and realized volatility. A walk-forward test scores the model against candles it had not yet seen, while live forecasts are saved and checked after they mature.</p>
+    </section>
+  </main>
+
+  <footer><span>BTC PREDICTER / 2026</span><span>Minute-level market data provided by Kraken</span></footer>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
