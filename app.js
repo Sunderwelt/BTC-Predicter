@@ -2,6 +2,7 @@ const KRAKEN_API = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1"
 const FORECAST_HORIZON = 15;
 const REFRESH_SECONDS = 60;
 const QUARTER_MS = 15 * 60 * 1000;
+const EASTERN_TIME_ZONE = "America/New_York";
 const STORAGE_KEY = "btc-predicter-quarter-hour-forecasts-v2";
 const state = { minutes: 180, candles: [], refreshAt: Date.now() + REFRESH_SECONDS * 1000 };
 
@@ -14,7 +15,7 @@ const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 function toast(message) { const el = $("toast"); el.textContent = message; el.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove("show"), 2800); }
 function quarterStart(time = Date.now()) { return Math.floor(time / QUARTER_MS) * QUARTER_MS; }
 function nextQuarter(time = Date.now()) { return quarterStart(time) + QUARTER_MS; }
-function clockTime(time) { return new Date(time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+function clockTime(time) { return new Date(time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: EASTERN_TIME_ZONE }); }
 function standardDeviation(values) { const avg = mean(values); return Math.sqrt(mean(values.map(n => (n - avg) ** 2))); }
 function returns(candles) { return candles.slice(1).map((c, i) => c.close / candles[i].close - 1); }
 function linearSlope(values) { const n = values.length, xMean = (n - 1) / 2, yMean = mean(values); let top = 0, bottom = 0; values.forEach((y, x) => { top += (x - xMean) * (y - yMean); bottom += (x - xMean) ** 2; }); return bottom ? top / bottom : 0; }
@@ -74,7 +75,7 @@ function updateLiveForecasts(model, candles) {
 function render(model, historical, liveRecords) {
   const candles = state.candles.slice(-state.minutes), current = state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
   $("currentPrice").textContent = money(current); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
-  $("lastUpdated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
+  $("lastUpdated").textContent = `Updated ${new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: EASTERN_TIME_ZONE, timeZoneName: "short" })}`;
   $("upProbability").textContent = `${model.probability}%`; $("probabilityRing").style.background = `conic-gradient(var(--orange) 0 ${model.probability}%, #202631 ${model.probability}%)`;
   const bullish = model.probability >= 54, bearish = model.probability <= 46;
   $("forecastDirection").textContent = bullish ? "Bullish 15m bias" : bearish ? "Bearish 15m bias" : "Neutral / mixed";
@@ -85,7 +86,7 @@ function render(model, historical, liveRecords) {
   $("strengthMetric").textContent = `${model.trendStrength.toFixed(0)}/100`; $("strengthLabel").textContent = model.trendStrength > 60 ? "Strong" : model.trendStrength > 30 ? "Developing" : "Weak";
   $("signalMetric").textContent = bullish ? "BUY BIAS" : bearish ? "SELL BIAS" : "NEUTRAL"; $("signalLabel").textContent = `${model.probability}% upside probability`;
   $("sampleSize").textContent = `${historical.length} historical forecasts`; $("directionAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.directionHit ? 1 : 0)) * 100)}%` : "—"; $("rangeAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.rangeHit ? 1 : 0)) * 100)}%` : "—"; $("meanError").textContent = historical.length ? `${mean(historical.map(r => r.error)).toFixed(3)}%` : "—"; $("liveTracked").textContent = liveRecords.filter(r => r.actual).length;
-  $("forecastWindow").textContent = `${clockTime(quarterStart())} → ${clockTime(nextQuarter())}`;
+  $("forecastWindow").textContent = `${clockTime(quarterStart())} → ${clockTime(nextQuarter())} ET`;
   $("chartTitle").textContent = `${state.minutes / 60}-hour market structure`; drawChart(candles);
 }
 
@@ -95,8 +96,8 @@ function drawChart(candles) {
   ctx.strokeStyle = "#1d232d"; ctx.lineWidth = 1; for (let i = 0; i < 4; i++) { const y = pad.t + i * (height - pad.t - pad.b) / 3; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
   const grad = ctx.createLinearGradient(0, 0, 0, height); grad.addColorStop(0, "rgba(247,147,26,.24)"); grad.addColorStop(1, "rgba(247,147,26,0)"); ctx.beginPath(); points.forEach((p, i) => { const q = xy(p, i); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }); ctx.lineTo(width - pad.r, height); ctx.lineTo(pad.l, height); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
   ctx.beginPath(); points.forEach((p, i) => { const q = xy(p, i); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }); ctx.strokeStyle = "#f7931a"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
-  canvas.onmousemove = event => { const rect = canvas.getBoundingClientRect(), i = clamp(Math.round((event.clientX - rect.left) / rect.width * (points.length - 1)), 0, points.length - 1), q = xy(points[i], i), tip = $("chartTooltip"); tip.hidden = false; tip.style.left = `${q.x}px`; tip.style.top = `${q.y}px`; tip.textContent = `${money(points[i].price)} · ${new Date(points[i].time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`; }; canvas.onmouseleave = () => $("chartTooltip").hidden = true;
-  $("chartStart").textContent = new Date(points[0].time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); $("chartEnd").textContent = new Date(points.at(-1).time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  canvas.onmousemove = event => { const rect = canvas.getBoundingClientRect(), i = clamp(Math.round((event.clientX - rect.left) / rect.width * (points.length - 1)), 0, points.length - 1), q = xy(points[i], i), tip = $("chartTooltip"); tip.hidden = false; tip.style.left = `${q.x}px`; tip.style.top = `${q.y}px`; tip.textContent = `${money(points[i].price)} · ${new Date(points[i].time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: EASTERN_TIME_ZONE, timeZoneName: "short" })}`; }; canvas.onmouseleave = () => $("chartTooltip").hidden = true;
+  $("chartStart").textContent = `${clockTime(points[0].time)} ET`; $("chartEnd").textContent = `${clockTime(points.at(-1).time)} ET`;
 }
 
 async function load({ silent = false } = {}) {
