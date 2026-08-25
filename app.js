@@ -77,7 +77,7 @@ function updateLiveForecasts(model, candles) {
 
 function render(model, historical, liveRecords) {
   const candles = state.candles.slice(-state.minutes), current = state.livePrice || state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
-  $("currentPrice").textContent = money(current); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
+  $("currentPrice").textContent = money(current, 2); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
   $("lastUpdated").textContent = `Updated ${easternTimestamp()}`;
   $("upProbability").textContent = `${model.probability}%`; $("probabilityRing").style.background = `conic-gradient(var(--orange) 0 ${model.probability}%, #202631 ${model.probability}%)`;
   const bullish = model.probability >= 54, bearish = model.probability <= 46;
@@ -101,7 +101,7 @@ function paintLivePrice(price, timestamp) {
   else { last.close = price; last.high = Math.max(last.high, price); last.low = Math.min(last.low, price); }
   state.candles = state.candles.slice(-720);
   const first = state.candles.slice(-state.minutes)[0].close, changeValue = (price / first - 1) * 100, change = $("priceChange");
-  $("currentPrice").textContent = money(price); change.textContent = `${pct(changeValue)} · ${state.minutes / 60}H`; change.className = `price-change ${changeValue > 0 ? "positive" : changeValue < 0 ? "negative" : "neutral"}`; $("lastUpdated").textContent = `Live trade ${easternTimestamp(timestamp)}`;
+  const priceElement = $("currentPrice"); priceElement.textContent = money(price, 2); priceElement.classList.remove("live-tick"); void priceElement.offsetWidth; priceElement.classList.add("live-tick"); change.textContent = `${pct(changeValue)} · ${state.minutes / 60}H`; change.className = `price-change ${changeValue > 0 ? "positive" : changeValue < 0 ? "negative" : "neutral"}`; $("lastUpdated").textContent = `Kraken last trade · ${easternTimestamp(timestamp)}`;
   drawChart(state.candles.slice(-state.minutes)); state.lastLivePaint = Date.now(); state.livePaintTimer = null;
 }
 
