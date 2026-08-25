@@ -1,10 +1,11 @@
 const KRAKEN_API = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1";
+const KRAKEN_SOCKET = "wss://ws.kraken.com/v2";
 const FORECAST_HORIZON = 15;
 const REFRESH_SECONDS = 60;
 const QUARTER_MS = 15 * 60 * 1000;
 const EASTERN_TIME_ZONE = "America/New_York";
 const STORAGE_KEY = "btc-predicter-quarter-hour-forecasts-v2";
-const state = { minutes: 180, candles: [], refreshAt: Date.now() + REFRESH_SECONDS * 1000 };
+const state = { minutes: 180, candles: [], livePrice: null, refreshAt: Date.now() + REFRESH_SECONDS * 1000, socketRetry: 0, lastLivePaint: 0, livePaintTimer: null, pendingLiveTimestamp: null };
 
 const $ = id => document.getElementById(id);
 const money = (value, digits = 0) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits }).format(value);
@@ -16,6 +17,8 @@ function toast(message) { const el = $("toast"); el.textContent = message; el.cl
 function quarterStart(time = Date.now()) { return Math.floor(time / QUARTER_MS) * QUARTER_MS; }
 function nextQuarter(time = Date.now()) { return quarterStart(time) + QUARTER_MS; }
 function clockTime(time) { return new Date(time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: EASTERN_TIME_ZONE }); }
+function easternTimestamp(time = Date.now()) { return new Date(time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: EASTERN_TIME_ZONE, timeZoneName: "short" }); }
+function setMarketStatus(mode, text) { $("marketStatus").className = `market-status ${mode}`.trim(); $("marketStatusText").textContent = text; }
 function standardDeviation(values) { const avg = mean(values); return Math.sqrt(mean(values.map(n => (n - avg) ** 2))); }
 function returns(candles) { return candles.slice(1).map((c, i) => c.close / candles[i].close - 1); }
 function linearSlope(values) { const n = values.length, xMean = (n - 1) / 2, yMean = mean(values); let top = 0, bottom = 0; values.forEach((y, x) => { top += (x - xMean) * (y - yMean); bottom += (x - xMean) ** 2; }); return bottom ? top / bottom : 0; }
@@ -73,9 +76,9 @@ function updateLiveForecasts(model, candles) {
 }
 
 function render(model, historical, liveRecords) {
-  const candles = state.candles.slice(-state.minutes), current = state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
+  const candles = state.candles.slice(-state.minutes), current = state.livePrice || state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
   $("currentPrice").textContent = money(current); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
-  $("lastUpdated").textContent = `Updated ${new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: EASTERN_TIME_ZONE, timeZoneName: "short" })}`;
+  $("lastUpdated").textContent = `Updated ${easternTimestamp()}`;
   $("upProbability").textContent = `${model.probability}%`; $("probabilityRing").style.background = `conic-gradient(var(--orange) 0 ${model.probability}%, #202631 ${model.probability}%)`;
   const bullish = model.probability >= 54, bearish = model.probability <= 46;
   $("forecastDirection").textContent = bullish ? "Bullish 15m bias" : bearish ? "Bearish 15m bias" : "Neutral / mixed";
@@ -88,6 +91,34 @@ function render(model, historical, liveRecords) {
   $("sampleSize").textContent = `${historical.length} historical forecasts`; $("directionAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.directionHit ? 1 : 0)) * 100)}%` : "—"; $("rangeAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.rangeHit ? 1 : 0)) * 100)}%` : "—"; $("meanError").textContent = historical.length ? `${mean(historical.map(r => r.error)).toFixed(3)}%` : "—"; $("liveTracked").textContent = liveRecords.filter(r => r.actual).length;
   $("forecastWindow").textContent = `${clockTime(quarterStart())} → ${clockTime(nextQuarter())} ET`;
   $("chartTitle").textContent = `${state.minutes / 60}-hour market structure`; drawChart(candles);
+}
+
+function paintLivePrice(price, timestamp) {
+  if (!state.candles.length) { state.livePaintTimer = null; return; }
+  state.livePrice = price;
+  const last = state.candles.at(-1), minute = Math.floor(timestamp / 60000) * 60000;
+  if (minute > last.time) state.candles.push({ time: minute, open: last.close, high: price, low: price, close: price, volume: 0 });
+  else { last.close = price; last.high = Math.max(last.high, price); last.low = Math.min(last.low, price); }
+  state.candles = state.candles.slice(-720);
+  const first = state.candles.slice(-state.minutes)[0].close, changeValue = (price / first - 1) * 100, change = $("priceChange");
+  $("currentPrice").textContent = money(price); change.textContent = `${pct(changeValue)} · ${state.minutes / 60}H`; change.className = `price-change ${changeValue > 0 ? "positive" : changeValue < 0 ? "negative" : "neutral"}`; $("lastUpdated").textContent = `Live trade ${easternTimestamp(timestamp)}`;
+  drawChart(state.candles.slice(-state.minutes)); state.lastLivePaint = Date.now(); state.livePaintTimer = null;
+}
+
+function queueLivePrice(price, timestamp) {
+  state.livePrice = price; state.pendingLiveTimestamp = timestamp;
+  if (state.livePaintTimer) return;
+  const wait = Math.max(0, 1000 - (Date.now() - state.lastLivePaint));
+  state.livePaintTimer = setTimeout(() => paintLivePrice(state.livePrice, state.pendingLiveTimestamp), wait);
+}
+
+function connectTicker() {
+  setMarketStatus("reconnecting", "Connecting live price…");
+  const socket = new WebSocket(KRAKEN_SOCKET);
+  socket.onopen = () => { state.socketRetry = 0; socket.send(JSON.stringify({ method: "subscribe", params: { channel: "ticker", symbol: ["BTC/USD"], event_trigger: "trades", snapshot: true } })); setMarketStatus("", "Kraken trades live"); };
+  socket.onmessage = event => { const message = JSON.parse(event.data); if (message.channel !== "ticker" || !message.data?.[0]?.last) return; const ticker = message.data[0], timestamp = ticker.timestamp ? Date.parse(ticker.timestamp) : Date.now(); queueLivePrice(+ticker.last, timestamp); };
+  socket.onerror = () => socket.close();
+  socket.onclose = () => { state.socketRetry += 1; setMarketStatus("reconnecting", "Live price reconnecting…"); setTimeout(connectTicker, Math.min(30000, 1000 * 2 ** Math.min(state.socketRetry, 5))); };
 }
 
 function drawChart(candles) {
@@ -110,4 +141,4 @@ async function load({ silent = false } = {}) {
 document.querySelectorAll("[data-minutes]").forEach(button => button.addEventListener("click", () => { document.querySelectorAll("[data-minutes]").forEach(b => b.classList.remove("active")); button.classList.add("active"); state.minutes = +button.dataset.minutes; const boundary = quarterStart(), forecastCandles = state.candles.filter(candle => candle.time < boundary); render(analyze(forecastCandles.length >= 180 ? forecastCandles : state.candles), backtest(state.candles), getLiveForecasts()); }));
 $("refreshButton").addEventListener("click", () => load()); window.addEventListener("resize", () => state.candles.length && drawChart(state.candles.slice(-state.minutes)));
 setInterval(() => { const remaining = Math.max(0, Math.ceil((nextQuarter() - Date.now()) / 1000)), minutes = Math.floor(remaining / 60), seconds = remaining % 60; $("countdown").textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`; if (Date.now() >= state.refreshAt) load({ silent: true }); }, 1000);
-load();
+load(); connectTicker();
