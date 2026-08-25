@@ -1,13 +1,16 @@
 # BTC Predicter
 
-A polished, transparent Bitcoin market dashboard with a short-term, signal-based forecast.
+A polished Bitcoin market dashboard with a rolling, testable 15-minute forecast.
 
 ## Features
 
-- Live BTC/USD history from CoinGecko
-- Interactive 24-hour, 7-day, 30-day, and 90-day charts
-- Momentum, realized volatility, and trend-strength indicators
-- Transparent 24-hour probability, target, and expected-range model
+- Live one-minute BTC/USD candles from Kraken
+- Interactive 1-hour, 3-hour, 6-hour, and 12-hour charts
+- 15-minute momentum, realized volatility, RSI, and trend indicators
+- Rolling 15-minute probability, target, and expected-range model
+- Walk-forward historical validation with direction and range accuracy
+- Browser-persisted live forecasts checked after 15 minutes
+- Automatic 60-second refresh
 - Responsive dark interface with no runtime dependencies
 - Graceful demo-data fallback when the public API is unavailable
 
@@ -23,7 +26,7 @@ Then open `http://localhost:8080`.
 
 ## Forecast model
 
-The estimate combines short/medium moving-average spread, recent momentum, and realized volatility. Probability is deliberately capped between 25% and 75%; this app does not pretend financial markets are predictable with certainty.
+The estimate combines one-minute regression slope, moving-average spread, 15-minute momentum, RSI, and realized volatility. Probability is deliberately capped; this app does not pretend financial markets are predictable with certainty. Historical accuracy uses walk-forward evaluation so every test is scored against candles the model had not yet seen.
 
 ## Disclaimer
 
