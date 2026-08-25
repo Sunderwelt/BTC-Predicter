@@ -12,6 +12,7 @@ A polished Bitcoin market dashboard with a rolling, testable 15-minute forecast.
 - Browser-persisted live forecasts checked after 15 minutes
 - Automatic 60-second refresh
 - Forecast cycles synchronized to `:00`, `:15`, `:30`, and `:45`
+- All displayed times locked to U.S. Eastern Time (`America/New_York`)
 - Responsive dark interface with no runtime dependencies
 - Graceful demo-data fallback when the public API is unavailable
 
