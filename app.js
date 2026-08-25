@@ -1,11 +1,11 @@
-const KRAKEN_API = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1";
+const KRAKEN_API = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD";
 const KRAKEN_SOCKET = "wss://ws.kraken.com/v2";
 const FORECAST_HORIZON = 15;
 const REFRESH_SECONDS = 60;
 const QUARTER_MS = 15 * 60 * 1000;
 const EASTERN_TIME_ZONE = "America/New_York";
 const STORAGE_KEY = "btc-predicter-quarter-hour-forecasts-v2";
-const state = { minutes: 180, candles: [], livePrice: null, refreshAt: Date.now() + REFRESH_SECONDS * 1000, socketRetry: 0, lastLivePaint: 0, livePaintTimer: null, pendingLiveTimestamp: null };
+const state = { view: "180", candles: [], candles5m: [], liveTicks: [], livePrice: null, refreshAt: Date.now() + REFRESH_SECONDS * 1000, socketRetry: 0, lastLivePaint: 0, livePaintTimer: null, pendingLiveTimestamp: null };
 
 const $ = id => document.getElementById(id);
 const money = (value, digits = 0) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits }).format(value);
@@ -24,8 +24,8 @@ function returns(candles) { return candles.slice(1).map((c, i) => c.close / cand
 function linearSlope(values) { const n = values.length, xMean = (n - 1) / 2, yMean = mean(values); let top = 0, bottom = 0; values.forEach((y, x) => { top += (x - xMean) * (y - yMean); bottom += (x - xMean) ** 2; }); return bottom ? top / bottom : 0; }
 function rsi(values, period = 14) { const slice = values.slice(-(period + 1)); let gains = 0, losses = 0; for (let i = 1; i < slice.length; i++) { const d = slice[i] - slice[i - 1]; d >= 0 ? gains += d : losses -= d; } return losses === 0 ? 100 : 100 - 100 / (1 + gains / losses); }
 
-async function fetchCandles() {
-  const response = await fetch(KRAKEN_API, { cache: "no-store" });
+async function fetchCandles(interval = 1) {
+  const response = await fetch(`${KRAKEN_API}&interval=${interval}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Kraken returned ${response.status}`);
   const data = await response.json();
   if (data.error?.length) throw new Error(data.error.join(", "));
@@ -33,7 +33,15 @@ async function fetchCandles() {
   return data.result[key].map(row => ({ time: row[0] * 1000, open: +row[1], high: +row[2], low: +row[3], close: +row[4], volume: +row[6] }));
 }
 
-function seededDemoData() { const now = Math.floor(Date.now() / 60000) * 60000; let close = 116400; return Array.from({ length: 720 }, (_, i) => { const open = close; close *= 1 + Math.sin(i * .31) * .00018 + Math.sin(i * .071) * .00011 + .000006; const wiggle = close * .0002; return { time: now - (719 - i) * 60000, open, high: Math.max(open, close) + wiggle, low: Math.min(open, close) - wiggle, close, volume: 2 + Math.abs(Math.sin(i)) * 4 }; }); }
+function seededDemoData(interval = 1) { const step = interval * 60000, now = Math.floor(Date.now() / step) * step; let close = 116400; return Array.from({ length: 720 }, (_, i) => { const open = close; close *= 1 + Math.sin(i * .31) * .00018 + Math.sin(i * .071) * .00011 + .000006; const wiggle = close * .0002; return { time: now - (719 - i) * step, open, high: Math.max(open, close) + wiggle, low: Math.min(open, close) - wiggle, close, volume: 2 + Math.abs(Math.sin(i)) * 4 }; }); }
+
+function viewLabel() { if (state.view === "live") return "LIVE"; const minutes = +state.view; return minutes < 60 ? `${minutes}M` : `${minutes / 60}H`; }
+function chartData() {
+  if (state.view === "live") return state.liveTicks.length >= 2 ? state.liveTicks : state.candles.slice(-5);
+  const minutes = +state.view;
+  return minutes > 720 ? state.candles5m.slice(-Math.ceil(minutes / 5)) : state.candles.slice(-minutes);
+}
+function chartTitle() { if (state.view === "live") return "Live trade tape"; const minutes = +state.view; return `${minutes < 60 ? minutes + "-minute" : minutes / 60 + "-hour"} market structure`; }
 
 function analyze(candles) {
   const sample = candles.slice(-180), closes = sample.map(c => c.close), current = closes.at(-1);
@@ -76,8 +84,8 @@ function updateLiveForecasts(model, candles) {
 }
 
 function render(model, historical, liveRecords) {
-  const candles = state.candles.slice(-state.minutes), current = state.livePrice || state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
-  $("currentPrice").textContent = money(current, 2); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
+  const candles = chartData(), current = state.livePrice || state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
+  $("currentPrice").textContent = money(current, 2); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${viewLabel()}`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
   $("lastUpdated").textContent = `Updated ${easternTimestamp()}`;
   $("upProbability").textContent = `${model.probability}%`; $("probabilityRing").style.background = `conic-gradient(var(--orange) 0 ${model.probability}%, #202631 ${model.probability}%)`;
   const bullish = model.probability >= 54, bearish = model.probability <= 46;
@@ -90,19 +98,25 @@ function render(model, historical, liveRecords) {
   $("signalMetric").textContent = bullish ? "BUY BIAS" : bearish ? "SELL BIAS" : "NEUTRAL"; $("signalLabel").textContent = `${model.probability}% upside probability`;
   $("sampleSize").textContent = `${historical.length} historical forecasts`; $("directionAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.directionHit ? 1 : 0)) * 100)}%` : "—"; $("rangeAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.rangeHit ? 1 : 0)) * 100)}%` : "—"; $("meanError").textContent = historical.length ? `${mean(historical.map(r => r.error)).toFixed(3)}%` : "—"; $("liveTracked").textContent = liveRecords.filter(r => r.actual).length;
   $("forecastWindow").textContent = `${clockTime(quarterStart())} → ${clockTime(nextQuarter())} ET`;
-  $("chartTitle").textContent = `${state.minutes / 60}-hour market structure`; drawChart(candles);
+  $("chartTitle").textContent = chartTitle(); drawChart(candles);
+}
+
+function updateCandleSeries(series, intervalMinutes, price, timestamp) {
+  if (!series.length) return;
+  const step = intervalMinutes * 60000, bucket = Math.floor(timestamp / step) * step, last = series.at(-1);
+  if (bucket > last.time) series.push({ time: bucket, open: last.close, high: price, low: price, close: price, volume: 0 });
+  else { last.close = price; last.high = Math.max(last.high, price); last.low = Math.min(last.low, price); }
+  if (series.length > 720) series.splice(0, series.length - 720);
 }
 
 function paintLivePrice(price, timestamp) {
   if (!state.candles.length) { state.livePaintTimer = null; return; }
   state.livePrice = price;
-  const last = state.candles.at(-1), minute = Math.floor(timestamp / 60000) * 60000;
-  if (minute > last.time) state.candles.push({ time: minute, open: last.close, high: price, low: price, close: price, volume: 0 });
-  else { last.close = price; last.high = Math.max(last.high, price); last.low = Math.min(last.low, price); }
-  state.candles = state.candles.slice(-720);
-  const first = state.candles.slice(-state.minutes)[0].close, changeValue = (price / first - 1) * 100, change = $("priceChange");
-  const priceElement = $("currentPrice"); priceElement.textContent = money(price, 2); priceElement.classList.remove("live-tick"); void priceElement.offsetWidth; priceElement.classList.add("live-tick"); change.textContent = `${pct(changeValue)} · ${state.minutes / 60}H`; change.className = `price-change ${changeValue > 0 ? "positive" : changeValue < 0 ? "negative" : "neutral"}`; $("lastUpdated").textContent = `Kraken last trade · ${easternTimestamp(timestamp)}`;
-  drawChart(state.candles.slice(-state.minutes)); state.lastLivePaint = Date.now(); state.livePaintTimer = null;
+  updateCandleSeries(state.candles, 1, price, timestamp); updateCandleSeries(state.candles5m, 5, price, timestamp);
+  state.liveTicks.push({ time: timestamp, open: price, high: price, low: price, close: price, volume: 0 }); state.liveTicks = state.liveTicks.filter(tick => tick.time >= timestamp - 5 * 60000).slice(-300);
+  const candles = chartData(), first = candles[0].close, changeValue = (price / first - 1) * 100, change = $("priceChange");
+  const priceElement = $("currentPrice"); priceElement.textContent = money(price, 2); priceElement.classList.remove("live-tick"); void priceElement.offsetWidth; priceElement.classList.add("live-tick"); change.textContent = `${pct(changeValue)} · ${viewLabel()}`; change.className = `price-change ${changeValue > 0 ? "positive" : changeValue < 0 ? "negative" : "neutral"}`; $("lastUpdated").textContent = `Kraken last trade · ${easternTimestamp(timestamp)}`;
+  $("chartTitle").textContent = chartTitle(); drawChart(candles); state.lastLivePaint = Date.now(); state.livePaintTimer = null;
 }
 
 function queueLivePrice(price, timestamp) {
@@ -123,22 +137,23 @@ function connectTicker() {
 
 function drawChart(candles) {
   const points = candles.map(c => ({ time: c.time, price: c.close })), canvas = $("priceChart"), wrap = canvas.parentElement, dpr = window.devicePixelRatio || 1, width = wrap.clientWidth, height = wrap.clientHeight; canvas.width = width * dpr; canvas.height = height * dpr; const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+  const chartTime = time => new Date(time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...(state.view === "live" ? { second: "2-digit" } : {}), timeZone: EASTERN_TIME_ZONE });
   const pad = { t: 18, r: 8, b: 14, l: 8 }, prices = points.map(p => p.price), min = Math.min(...prices), max = Math.max(...prices), spread = max - min || 1, xy = (p, i) => ({ x: pad.l + i / (points.length - 1) * (width - pad.l - pad.r), y: pad.t + (max - p.price) / spread * (height - pad.t - pad.b) });
   ctx.strokeStyle = "#1d232d"; ctx.lineWidth = 1; for (let i = 0; i < 4; i++) { const y = pad.t + i * (height - pad.t - pad.b) / 3; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
   const grad = ctx.createLinearGradient(0, 0, 0, height); grad.addColorStop(0, "rgba(247,147,26,.24)"); grad.addColorStop(1, "rgba(247,147,26,0)"); ctx.beginPath(); points.forEach((p, i) => { const q = xy(p, i); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }); ctx.lineTo(width - pad.r, height); ctx.lineTo(pad.l, height); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
   ctx.beginPath(); points.forEach((p, i) => { const q = xy(p, i); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }); ctx.strokeStyle = "#f7931a"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
-  canvas.onmousemove = event => { const rect = canvas.getBoundingClientRect(), i = clamp(Math.round((event.clientX - rect.left) / rect.width * (points.length - 1)), 0, points.length - 1), q = xy(points[i], i), tip = $("chartTooltip"); tip.hidden = false; tip.style.left = `${q.x}px`; tip.style.top = `${q.y}px`; tip.textContent = `${money(points[i].price)} · ${new Date(points[i].time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: EASTERN_TIME_ZONE, timeZoneName: "short" })}`; }; canvas.onmouseleave = () => $("chartTooltip").hidden = true;
-  $("chartStart").textContent = `${clockTime(points[0].time)} ET`; $("chartEnd").textContent = `${clockTime(points.at(-1).time)} ET`;
+  canvas.onmousemove = event => { const rect = canvas.getBoundingClientRect(), i = clamp(Math.round((event.clientX - rect.left) / rect.width * (points.length - 1)), 0, points.length - 1), q = xy(points[i], i), tip = $("chartTooltip"); tip.hidden = false; tip.style.left = `${q.x}px`; tip.style.top = `${q.y}px`; tip.textContent = `${money(points[i].price, 2)} · ${chartTime(points[i].time)} ET`; }; canvas.onmouseleave = () => $("chartTooltip").hidden = true;
+  $("chartStart").textContent = `${chartTime(points[0].time)} ET`; $("chartEnd").textContent = `${chartTime(points.at(-1).time)} ET`;
 }
 
 async function load({ silent = false } = {}) {
   if (!silent) $("refreshButton").classList.add("loading");
-  try { state.candles = await fetchCandles(); } catch (error) { console.warn(error); state.candles = seededDemoData(); toast("Live API unavailable — showing demo data"); }
+  try { [state.candles, state.candles5m] = await Promise.all([fetchCandles(1), fetchCandles(5)]); } catch (error) { console.warn(error); state.candles = seededDemoData(1); state.candles5m = seededDemoData(5); toast("Live API unavailable — showing demo data"); }
   finally { $("refreshButton").classList.remove("loading"); }
   const boundary = quarterStart(), forecastCandles = state.candles.filter(candle => candle.time < boundary), model = analyze(forecastCandles.length >= 180 ? forecastCandles : state.candles), historical = backtest(state.candles), liveRecords = updateLiveForecasts(model, state.candles); state.refreshAt = Date.now() + REFRESH_SECONDS * 1000; render(model, historical, liveRecords);
 }
 
-document.querySelectorAll("[data-minutes]").forEach(button => button.addEventListener("click", () => { document.querySelectorAll("[data-minutes]").forEach(b => b.classList.remove("active")); button.classList.add("active"); state.minutes = +button.dataset.minutes; const boundary = quarterStart(), forecastCandles = state.candles.filter(candle => candle.time < boundary); render(analyze(forecastCandles.length >= 180 ? forecastCandles : state.candles), backtest(state.candles), getLiveForecasts()); }));
-$("refreshButton").addEventListener("click", () => load()); window.addEventListener("resize", () => state.candles.length && drawChart(state.candles.slice(-state.minutes)));
+document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => { document.querySelectorAll("[data-view]").forEach(b => b.classList.remove("active")); button.classList.add("active"); state.view = button.dataset.view; const boundary = quarterStart(), forecastCandles = state.candles.filter(candle => candle.time < boundary); render(analyze(forecastCandles.length >= 180 ? forecastCandles : state.candles), backtest(state.candles), getLiveForecasts()); }));
+$("refreshButton").addEventListener("click", () => load()); window.addEventListener("resize", () => state.candles.length && drawChart(chartData()));
 setInterval(() => { const remaining = Math.max(0, Math.ceil((nextQuarter() - Date.now()) / 1000)), minutes = Math.floor(remaining / 60), seconds = remaining % 60; $("countdown").textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`; if (Date.now() >= state.refreshAt) load({ silent: true }); }, 1000);
 load(); connectTicker();

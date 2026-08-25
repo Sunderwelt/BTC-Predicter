@@ -7,7 +7,8 @@ A polished Bitcoin market dashboard with a rolling, testable 15-minute forecast.
 - Live one-minute BTC/USD candles from Kraken
 - Live Kraken trade-price stream through WebSocket, painted once per second
 - Cent-level live display with a visible pulse on each painted trade update
-- Interactive 1-hour, 3-hour, 6-hour, and 12-hour charts
+- Interactive live, 5-minute, 15-minute, 1-hour, 3-hour, 12-hour, and 24-hour charts
+- Separate five-minute Kraken candle feed for the 24-hour view
 - 15-minute momentum, realized volatility, RSI, and trend indicators
 - Rolling 15-minute probability, target, and expected-range model
 - Walk-forward historical validation with direction and range accuracy
