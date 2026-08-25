@@ -1,7 +1,8 @@
 const KRAKEN_API = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1";
 const FORECAST_HORIZON = 15;
 const REFRESH_SECONDS = 60;
-const STORAGE_KEY = "btc-predicter-live-forecasts-v1";
+const QUARTER_MS = 15 * 60 * 1000;
+const STORAGE_KEY = "btc-predicter-quarter-hour-forecasts-v2";
 const state = { minutes: 180, candles: [], refreshAt: Date.now() + REFRESH_SECONDS * 1000 };
 
 const $ = id => document.getElementById(id);
@@ -11,6 +12,9 @@ const mean = values => values.reduce((sum, n) => sum + n, 0) / Math.max(values.l
 const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 
 function toast(message) { const el = $("toast"); el.textContent = message; el.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove("show"), 2800); }
+function quarterStart(time = Date.now()) { return Math.floor(time / QUARTER_MS) * QUARTER_MS; }
+function nextQuarter(time = Date.now()) { return quarterStart(time) + QUARTER_MS; }
+function clockTime(time) { return new Date(time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
 function standardDeviation(values) { const avg = mean(values); return Math.sqrt(mean(values.map(n => (n - avg) ** 2))); }
 function returns(candles) { return candles.slice(1).map((c, i) => c.close / candles[i].close - 1); }
 function linearSlope(values) { const n = values.length, xMean = (n - 1) / 2, yMean = mean(values); let top = 0, bottom = 0; values.forEach((y, x) => { top += (x - xMean) * (y - yMean); bottom += (x - xMean) ** 2; }); return bottom ? top / bottom : 0; }
@@ -48,7 +52,7 @@ function analyze(candles) {
 
 function backtest(candles) {
   const results = [];
-  for (let i = 180; i < candles.length - FORECAST_HORIZON; i += 5) {
+  for (let i = 180; i < candles.length - FORECAST_HORIZON; i += FORECAST_HORIZON) {
     const model = analyze(candles.slice(0, i + 1)), actual = candles[i + FORECAST_HORIZON].close, start = candles[i].close;
     results.push({ directionHit: Math.sign(model.target - start) === Math.sign(actual - start), rangeHit: actual >= model.low && actual <= model.high, error: Math.abs(model.target - actual) / actual * 100 });
   }
@@ -56,10 +60,11 @@ function backtest(candles) {
 }
 
 function getLiveForecasts() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; } }
-function updateLiveForecasts(model) {
-  const now = Date.now(), bucket = Math.floor(now / 300000) * 300000;
+function updateLiveForecasts(model, candles) {
+  const now = Date.now(), bucket = quarterStart(now);
   let records = getLiveForecasts().map(record => {
-    if (!record.actual && now >= record.maturesAt) return { ...record, actual: model.current, directionHit: Math.sign(record.target - record.start) === Math.sign(model.current - record.start), rangeHit: model.current >= record.low && model.current <= record.high };
+    const matureCandle = !record.actual && now >= record.maturesAt ? candles.find(candle => candle.time >= record.maturesAt) : null;
+    if (matureCandle) return { ...record, actual: matureCandle.close, directionHit: Math.sign(record.target - record.start) === Math.sign(matureCandle.close - record.start), rangeHit: matureCandle.close >= record.low && matureCandle.close <= record.high };
     return record;
   });
   if (!records.some(r => r.createdAt === bucket)) records.push({ createdAt: bucket, maturesAt: bucket + FORECAST_HORIZON * 60000, start: model.current, target: model.target, low: model.low, high: model.high, direction: model.direction });
@@ -67,8 +72,8 @@ function updateLiveForecasts(model) {
 }
 
 function render(model, historical, liveRecords) {
-  const candles = state.candles.slice(-state.minutes), first = candles[0].close, chartChange = (model.current / first - 1) * 100;
-  $("currentPrice").textContent = money(model.current); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
+  const candles = state.candles.slice(-state.minutes), current = state.candles.at(-1).close, first = candles[0].close, chartChange = (current / first - 1) * 100;
+  $("currentPrice").textContent = money(current); const change = $("priceChange"); change.textContent = `${pct(chartChange)} · ${state.minutes / 60}H`; change.className = `price-change ${chartChange > 0 ? "positive" : chartChange < 0 ? "negative" : "neutral"}`;
   $("lastUpdated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
   $("upProbability").textContent = `${model.probability}%`; $("probabilityRing").style.background = `conic-gradient(var(--orange) 0 ${model.probability}%, #202631 ${model.probability}%)`;
   const bullish = model.probability >= 54, bearish = model.probability <= 46;
@@ -80,6 +85,7 @@ function render(model, historical, liveRecords) {
   $("strengthMetric").textContent = `${model.trendStrength.toFixed(0)}/100`; $("strengthLabel").textContent = model.trendStrength > 60 ? "Strong" : model.trendStrength > 30 ? "Developing" : "Weak";
   $("signalMetric").textContent = bullish ? "BUY BIAS" : bearish ? "SELL BIAS" : "NEUTRAL"; $("signalLabel").textContent = `${model.probability}% upside probability`;
   $("sampleSize").textContent = `${historical.length} historical forecasts`; $("directionAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.directionHit ? 1 : 0)) * 100)}%` : "—"; $("rangeAccuracy").textContent = historical.length ? `${Math.round(mean(historical.map(r => r.rangeHit ? 1 : 0)) * 100)}%` : "—"; $("meanError").textContent = historical.length ? `${mean(historical.map(r => r.error)).toFixed(3)}%` : "—"; $("liveTracked").textContent = liveRecords.filter(r => r.actual).length;
+  $("forecastWindow").textContent = `${clockTime(quarterStart())} → ${clockTime(nextQuarter())}`;
   $("chartTitle").textContent = `${state.minutes / 60}-hour market structure`; drawChart(candles);
 }
 
@@ -97,10 +103,10 @@ async function load({ silent = false } = {}) {
   if (!silent) $("refreshButton").classList.add("loading");
   try { state.candles = await fetchCandles(); } catch (error) { console.warn(error); state.candles = seededDemoData(); toast("Live API unavailable — showing demo data"); }
   finally { $("refreshButton").classList.remove("loading"); }
-  const model = analyze(state.candles), historical = backtest(state.candles), liveRecords = updateLiveForecasts(model); state.refreshAt = Date.now() + REFRESH_SECONDS * 1000; render(model, historical, liveRecords);
+  const boundary = quarterStart(), forecastCandles = state.candles.filter(candle => candle.time < boundary), model = analyze(forecastCandles.length >= 180 ? forecastCandles : state.candles), historical = backtest(state.candles), liveRecords = updateLiveForecasts(model, state.candles); state.refreshAt = Date.now() + REFRESH_SECONDS * 1000; render(model, historical, liveRecords);
 }
 
-document.querySelectorAll("[data-minutes]").forEach(button => button.addEventListener("click", () => { document.querySelectorAll("[data-minutes]").forEach(b => b.classList.remove("active")); button.classList.add("active"); state.minutes = +button.dataset.minutes; render(analyze(state.candles), backtest(state.candles), getLiveForecasts()); }));
+document.querySelectorAll("[data-minutes]").forEach(button => button.addEventListener("click", () => { document.querySelectorAll("[data-minutes]").forEach(b => b.classList.remove("active")); button.classList.add("active"); state.minutes = +button.dataset.minutes; const boundary = quarterStart(), forecastCandles = state.candles.filter(candle => candle.time < boundary); render(analyze(forecastCandles.length >= 180 ? forecastCandles : state.candles), backtest(state.candles), getLiveForecasts()); }));
 $("refreshButton").addEventListener("click", () => load()); window.addEventListener("resize", () => state.candles.length && drawChart(state.candles.slice(-state.minutes)));
-setInterval(() => { const seconds = Math.max(0, Math.ceil((state.refreshAt - Date.now()) / 1000)); $("countdown").textContent = `00:${String(seconds).padStart(2, "0")}`; if (seconds === 0) load({ silent: true }); }, 1000);
+setInterval(() => { const remaining = Math.max(0, Math.ceil((nextQuarter() - Date.now()) / 1000)), minutes = Math.floor(remaining / 60), seconds = remaining % 60; $("countdown").textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`; if (Date.now() >= state.refreshAt) load({ silent: true }); }, 1000);
 load();
